@@ -5,7 +5,7 @@ import morgan from "morgan";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { pool } from "./config/db.js";
+import { pool, testDbConnection } from "./config/db.js";
 import { authMiddleware } from "./middleware/auth.js";
 
 import authRoutes from "./modules/auth/auth.routes.js";
@@ -32,7 +32,7 @@ const envPath = path.resolve(currentDir, "../.env");
 
 /**
  * Local development ke liye apps/api/.env load hoga.
- * Vercel production mein env variables Vercel dashboard se load honge.
+ * Vercel production mein env variables dashboard se load honge.
  */
 dotenv.config({ path: envPath });
 
@@ -52,16 +52,10 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin(origin, callback) {
-    /**
-     * Allow server-to-server requests, Postman, health checks, and same-origin calls.
-     */
     if (!origin) {
       return callback(null, true);
     }
 
-    /**
-     * Allow any localhost/127.0.0.1 port during local development.
-     */
     if (/^http:\/\/localhost:\d+$/.test(origin)) {
       return callback(null, true);
     }
@@ -70,9 +64,6 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    /**
-     * Allow configured production frontend/admin URLs.
-     */
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
@@ -106,9 +97,26 @@ app.get("/api/health", (req, res) => {
     ok: true,
     service: "pet-pos-api",
     envLoaded: Boolean(process.env.DATABASE_URL),
+    hasJwtSecret: Boolean(process.env.JWT_SECRET),
     environment: process.env.NODE_ENV || "development",
     vercel: process.env.VERCEL || "0",
+    allowedOrigins,
   });
+});
+
+app.get("/api/db-health", async (req, res, next) => {
+  try {
+    const db = await testDbConnection();
+
+    res.json({
+      ok: true,
+      service: "pet-pos-api",
+      database: "connected",
+      now: db.now,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**
@@ -126,7 +134,6 @@ app.use("/api/categories", categoriesRoutes);
 
 /**
  * Admin aliases for existing modules.
- * This fixes frontend calls like /api/admin/products.
  */
 app.use("/api/admin/dashboard", dashboardRoutes);
 app.use("/api/admin/pos", posRoutes);
@@ -135,12 +142,6 @@ app.use("/api/admin/categories", categoriesRoutes);
 
 /**
  * New admin modules.
- * These route files are mounted under /api/admin.
- * Example final routes:
- * /api/admin/inventory/overview
- * /api/admin/orders
- * /api/admin/customers
- * /api/admin/delivery/orders
  */
 app.use(
   "/api/admin",
@@ -230,9 +231,6 @@ app.use(
   })
 );
 
-/**
- * 404 handler
- */
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
@@ -242,9 +240,6 @@ app.use((req, res) => {
   });
 });
 
-/**
- * Error handler
- */
 app.use((error, req, res, next) => {
   console.error("API Error:", error);
 
@@ -263,7 +258,7 @@ app.use((error, req, res, next) => {
 
 /**
  * Local development only.
- * Vercel serverless deployment must NOT call app.listen().
+ * Vercel serverless deployment must not call app.listen().
  */
 if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
   const port = process.env.PORT || 5000;
