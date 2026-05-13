@@ -5,16 +5,45 @@ import morgan from "morgan";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { pool } from "./config/db.js";
+import { authMiddleware } from "./middleware/auth.js";
+
+import authRoutes from "./modules/auth/auth.routes.js";
+import dashboardRoutes from "./modules/dashboard/dashboard.routes.js";
+import posRoutes from "./modules/pos/pos.routes.js";
+import productsRoutes from "./modules/products/products.routes.js";
+import categoriesRoutes from "./modules/categories/categories.routes.js";
+import inventoryRoutes from "./modules/inventory/inventory.routes.js";
+
+import ordersRoutes from "./modules/orders/orders.routes.js";
+import customersRoutes from "./modules/customers/customers.routes.js";
+import deliveryRoutes from "./modules/delivery/delivery.routes.js";
+import promotionsRoutes from "./modules/promotions/promotions.routes.js";
+import reportsRoutes from "./modules/reports/reports.routes.js";
+import whatsappRoutes from "./modules/whatsapp/whatsapp.routes.js";
+import settingsRoutes from "./modules/settings/settings.routes.js";
+import usersRoutes from "./modules/users/users.routes.js";
+import auditRoutes from "./modules/audit/audit.routes.js";
+import woocommerceRoutes from "./modules/woocommerce/woocommerce.routes.js";
+
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const envPath = path.resolve(currentDir, "../.env");
 
+/**
+ * Local development:
+ * Loads apps/api/.env
+ *
+ * Vercel production:
+ * Uses environment variables from Vercel dashboard.
+ */
 dotenv.config({ path: envPath });
 
 const app = express();
 
-const bootErrors = [];
-
+/**
+ * CORS
+ */
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
@@ -23,8 +52,10 @@ const allowedOrigins = [
   "http://127.0.0.1:5174",
   "http://127.0.0.1:3000",
 
+  // Production admin frontend
   "https://petpos-9ujf.vercel.app",
 
+  // Env based frontend URLs
   process.env.FRONTEND_URL,
   process.env.ADMIN_URL,
   process.env.APP_URL,
@@ -35,12 +66,8 @@ function isAllowedOrigin(origin) {
 
   if (allowedOrigins.includes(origin)) return true;
 
-  if (/^http:\/\/localhost:\d+$/.test(origin)) return true;
-  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return true;
-
-  if (/^https:\/\/petpos-[a-zA-Z0-9-]+\.vercel\.app$/.test(origin)) {
-    return true;
-  }
+  if (origin.startsWith("http://localhost:")) return true;
+  if (origin.startsWith("http://127.0.0.1:")) return true;
 
   return false;
 }
@@ -65,6 +92,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 
+/**
+ * Body parsers
+ */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -72,6 +102,9 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
+/**
+ * Root / health
+ */
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -89,187 +122,11 @@ app.get("/api/health", (req, res) => {
     environment: process.env.NODE_ENV || "development",
     vercel: process.env.VERCEL || "0",
     allowedOrigins,
-    bootErrors,
   });
 });
 
-let pool = null;
-let authMiddleware = null;
-
-async function loadDbAndMiddleware() {
-  try {
-    const dbModule = await import("./config/db.js");
-    const authModule = await import("./middleware/auth.js");
-
-    pool = dbModule.pool;
-    authMiddleware = authModule.authMiddleware;
-
-    console.log("DB and auth middleware loaded.");
-  } catch (error) {
-    console.error("Failed to load DB/auth middleware:", error);
-
-    bootErrors.push({
-      area: "db-auth",
-      message: error.message,
-      stack: error.stack,
-    });
-  }
-}
-
-async function mountSimpleRoute(pathName, importer, exportName = "default") {
-  try {
-    const mod = await importer();
-    const router = mod[exportName];
-
-    if (!router) {
-      throw new Error(`Route export missing: ${exportName}`);
-    }
-
-    app.use(pathName, router);
-
-    console.log(`Mounted route: ${pathName}`);
-  } catch (error) {
-    console.error(`Failed to mount route ${pathName}:`, error);
-
-    bootErrors.push({
-      area: `route:${pathName}`,
-      message: error.message,
-      stack: error.stack,
-    });
-  }
-}
-
-async function mountFactoryRoute(pathName, importer, exportName = "default") {
-  try {
-    if (!pool || !authMiddleware) {
-      throw new Error("pool/authMiddleware not loaded");
-    }
-
-    const mod = await importer();
-    const routeFactory = mod[exportName];
-
-    if (typeof routeFactory !== "function") {
-      throw new Error(`Route factory export is not a function: ${exportName}`);
-    }
-
-    const router = routeFactory({
-      pool,
-      authMiddleware,
-    });
-
-    app.use(pathName, router);
-
-    console.log(`Mounted factory route: ${pathName}`);
-  } catch (error) {
-    console.error(`Failed to mount factory route ${pathName}:`, error);
-
-    bootErrors.push({
-      area: `factory-route:${pathName}`,
-      message: error.message,
-      stack: error.stack,
-    });
-  }
-}
-
-await loadDbAndMiddleware();
-
-/**
- * Auth/Public routes
- */
-await mountSimpleRoute("/api/auth", () =>
-  import("./modules/auth/auth.routes.js")
-);
-
-await mountSimpleRoute("/api/dashboard", () =>
-  import("./modules/dashboard/dashboard.routes.js")
-);
-
-await mountSimpleRoute("/api/pos", () => import("./modules/pos/pos.routes.js"));
-
-await mountSimpleRoute("/api/products", () =>
-  import("./modules/products/products.routes.js")
-);
-
-await mountSimpleRoute("/api/categories", () =>
-  import("./modules/categories/categories.routes.js")
-);
-
-/**
- * Admin aliases for existing modules
- */
-await mountSimpleRoute("/api/admin/dashboard", () =>
-  import("./modules/dashboard/dashboard.routes.js")
-);
-
-await mountSimpleRoute("/api/admin/pos", () =>
-  import("./modules/pos/pos.routes.js")
-);
-
-await mountSimpleRoute("/api/admin/products", () =>
-  import("./modules/products/products.routes.js")
-);
-
-await mountSimpleRoute("/api/admin/categories", () =>
-  import("./modules/categories/categories.routes.js")
-);
-
-/**
- * Admin factory modules
- */
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/inventory/inventory.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/orders/orders.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/customers/customers.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/delivery/delivery.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/promotions/promotions.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/reports/reports.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/whatsapp/whatsapp.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/settings/settings.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/users/users.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/audit/audit.routes.js")
-);
-
-await mountFactoryRoute("/api/admin", () =>
-  import("./modules/woocommerce/woocommerce.routes.js")
-);
-
 app.get("/api/db-health", async (req, res, next) => {
   try {
-    if (!pool) {
-      return res.status(500).json({
-        ok: false,
-        message: "Database pool not loaded.",
-        bootErrors,
-      });
-    }
-
     const result = await pool.query("select now() as now");
 
     res.json({
@@ -283,16 +140,133 @@ app.get("/api/db-health", async (req, res, next) => {
   }
 });
 
+/**
+ * Auth/Public routes
+ */
+app.use("/api/auth", authRoutes);
+
+/**
+ * Existing direct module routes
+ */
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/pos", posRoutes);
+app.use("/api/products", productsRoutes);
+app.use("/api/categories", categoriesRoutes);
+
+/**
+ * Admin aliases for existing direct modules
+ */
+app.use("/api/admin/dashboard", dashboardRoutes);
+app.use("/api/admin/pos", posRoutes);
+app.use("/api/admin/products", productsRoutes);
+app.use("/api/admin/categories", categoriesRoutes);
+
+/**
+ * Admin factory modules
+ */
+app.use(
+  "/api/admin",
+  inventoryRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  ordersRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  customersRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  deliveryRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  promotionsRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  reportsRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  whatsappRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  settingsRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  usersRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  auditRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+app.use(
+  "/api/admin",
+  woocommerceRoutes({
+    pool,
+    authMiddleware,
+  })
+);
+
+/**
+ * 404 handler
+ */
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
     message: "API route not found.",
     method: req.method,
     path: req.originalUrl,
-    bootErrors,
   });
 });
 
+/**
+ * Error handler
+ */
 app.use((error, req, res, next) => {
   console.error("API Error:", error);
 
@@ -306,10 +280,13 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({
     ok: false,
     message: error.message || "Internal server error.",
-    bootErrors,
   });
 });
 
+/**
+ * Local development only.
+ * Vercel serverless deployment must not call app.listen().
+ */
 if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
   const port = process.env.PORT || 5000;
 
