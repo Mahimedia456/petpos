@@ -45,34 +45,50 @@ const allowedOrigins = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
   "http://127.0.0.1:3000",
+
+  // Production admin frontend
+  "https://petpos-9ujf.vercel.app",
+
+  // Env based origins
   process.env.FRONTEND_URL,
   process.env.ADMIN_URL,
   process.env.APP_URL,
 ].filter(Boolean);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+
+  if (allowedOrigins.includes(origin)) return true;
+
+  if (/^http:\/\/localhost:\d+$/.test(origin)) return true;
+  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return true;
+
+  /**
+   * Optional: allow Vercel preview deployments for this project.
+   * This helps when Vercel creates random preview URLs.
+   */
+  if (/^https:\/\/petpos-[a-zA-Z0-9-]+\.vercel\.app$/.test(origin)) {
+    return true;
+  }
+
+  return false;
+}
+
 const corsOptions = {
   origin(origin, callback) {
-    if (!origin) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
 
-    if (/^http:\/\/localhost:\d+$/.test(origin)) {
-      return callback(null, true);
-    }
-
-    if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) {
-      return callback(null, true);
-    }
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+    console.error("CORS blocked origin:", origin);
+    console.error("Allowed origins:", allowedOrigins);
 
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
