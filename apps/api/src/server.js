@@ -30,14 +30,38 @@ const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const envPath = path.resolve(currentDir, "../.env");
 
+/**
+ * Local development ke liye apps/api/.env load hoga.
+ * Vercel production mein env variables Vercel dashboard se load honge.
+ */
 dotenv.config({ path: envPath });
 
 const app = express();
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "http://127.0.0.1:3000",
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
+  process.env.APP_URL,
+].filter(Boolean);
+
 const corsOptions = {
   origin(origin, callback) {
-    if (!origin) return callback(null, true);
+    /**
+     * Allow server-to-server requests, Postman, health checks, and same-origin calls.
+     */
+    if (!origin) {
+      return callback(null, true);
+    }
 
+    /**
+     * Allow any localhost/127.0.0.1 port during local development.
+     */
     if (/^http:\/\/localhost:\d+$/.test(origin)) {
       return callback(null, true);
     }
@@ -46,12 +70,9 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    const allowedOrigins = [
-      process.env.FRONTEND_URL,
-      process.env.ADMIN_URL,
-      process.env.APP_URL,
-    ].filter(Boolean);
-
+    /**
+     * Allow configured production frontend/admin URLs.
+     */
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
@@ -68,7 +89,10 @@ app.options(/.*/, cors(corsOptions));
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-app.use(morgan("dev"));
+
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+}
 
 app.get("/", (req, res) => {
   res.json({
@@ -82,6 +106,8 @@ app.get("/api/health", (req, res) => {
     ok: true,
     service: "pet-pos-api",
     envLoaded: Boolean(process.env.DATABASE_URL),
+    environment: process.env.NODE_ENV || "development",
+    vercel: process.env.VERCEL || "0",
   });
 });
 
@@ -108,7 +134,13 @@ app.use("/api/admin/products", productsRoutes);
 app.use("/api/admin/categories", categoriesRoutes);
 
 /**
- * New admin modules
+ * New admin modules.
+ * These route files are mounted under /api/admin.
+ * Example final routes:
+ * /api/admin/inventory/overview
+ * /api/admin/orders
+ * /api/admin/customers
+ * /api/admin/delivery/orders
  */
 app.use(
   "/api/admin",
@@ -198,14 +230,21 @@ app.use(
   })
 );
 
+/**
+ * 404 handler
+ */
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
     message: "API route not found.",
+    method: req.method,
     path: req.originalUrl,
   });
 });
 
+/**
+ * Error handler
+ */
 app.use((error, req, res, next) => {
   console.error("API Error:", error);
 
@@ -216,14 +255,22 @@ app.use((error, req, res, next) => {
     });
   }
 
-  res.status(500).json({
+  res.status(error.status || 500).json({
     ok: false,
     message: error.message || "Internal server error.",
   });
 });
 
-const port = process.env.PORT || 5000;
+/**
+ * Local development only.
+ * Vercel serverless deployment must NOT call app.listen().
+ */
+if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
+  const port = process.env.PORT || 5000;
 
-app.listen(port, () => {
-  console.log("Pet POS API running on port " + port);
-});
+  app.listen(port, () => {
+    console.log(`Pet POS API running on http://localhost:${port}`);
+  });
+}
+
+export default app;
