@@ -30,20 +30,10 @@ const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const envPath = path.resolve(currentDir, "../.env");
 
-/**
- * Local development:
- * Loads apps/api/.env
- *
- * Vercel production:
- * Uses environment variables from Vercel dashboard.
- */
 dotenv.config({ path: envPath });
 
 const app = express();
 
-/**
- * CORS
- */
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
@@ -51,11 +41,7 @@ const allowedOrigins = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
   "http://127.0.0.1:3000",
-
-  // Production admin frontend
   "https://petpos-9ujf.vercel.app",
-
-  // Env based frontend URLs
   process.env.FRONTEND_URL,
   process.env.ADMIN_URL,
   process.env.APP_URL,
@@ -63,12 +49,9 @@ const allowedOrigins = [
 
 function isAllowedOrigin(origin) {
   if (!origin) return true;
-
   if (allowedOrigins.includes(origin)) return true;
-
   if (origin.startsWith("http://localhost:")) return true;
   if (origin.startsWith("http://127.0.0.1:")) return true;
-
   return false;
 }
 
@@ -92,9 +75,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 
-/**
- * Body parsers
- */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -102,9 +82,6 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-/**
- * Root / health
- */
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -140,30 +117,18 @@ app.get("/api/db-health", async (req, res, next) => {
   }
 });
 
-/**
- * Auth/Public routes
- */
 app.use("/api/auth", authRoutes);
 
-/**
- * Existing direct module routes
- */
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/pos", posRoutes);
 app.use("/api/products", productsRoutes);
 app.use("/api/categories", categoriesRoutes);
 
-/**
- * Admin aliases for existing direct modules
- */
 app.use("/api/admin/dashboard", dashboardRoutes);
 app.use("/api/admin/pos", posRoutes);
 app.use("/api/admin/products", productsRoutes);
 app.use("/api/admin/categories", categoriesRoutes);
 
-/**
- * Admin factory modules
- */
 app.use(
   "/api/admin",
   inventoryRoutes({
@@ -252,9 +217,6 @@ app.use(
   })
 );
 
-/**
- * 404 handler
- */
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
@@ -264,9 +226,6 @@ app.use((req, res) => {
   });
 });
 
-/**
- * Error handler
- */
 app.use((error, req, res, next) => {
   console.error("API Error:", error);
 
@@ -283,10 +242,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-/**
- * Local development only.
- * Vercel serverless deployment must not call app.listen().
- */
 if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
   const port = process.env.PORT || 5000;
 
