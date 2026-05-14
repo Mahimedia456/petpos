@@ -42,6 +42,8 @@ function normalizeOrderData(data) {
       id: order.id || order.order_id,
       order_number: order.order_number || order.order_no,
       order_no: order.order_no || order.order_number,
+      source: order.source || order.channel,
+      channel: order.channel || order.source,
       subtotal: Number(order.subtotal || 0),
       discount_amount: Number(order.discount_amount || order.discount_total || 0),
       discount_total: Number(order.discount_total || order.discount_amount || 0),
@@ -49,8 +51,12 @@ function normalizeOrderData(data) {
       total_amount: Number(order.total_amount || order.grand_total || 0),
       grand_total: Number(order.grand_total || order.total_amount || 0),
     },
-    items: data?.items || [],
-    payments: data?.payments || (data?.payment ? [data.payment] : []),
+    items: Array.isArray(data?.items) ? data.items : [],
+    payments: Array.isArray(data?.payments)
+      ? data.payments
+      : data?.payment
+        ? [data.payment]
+        : [],
   };
 }
 
@@ -113,6 +119,7 @@ export default function ReceiptPrintPage() {
   async function loadSettingsSafe() {
     try {
       const data = await getStoreSettings();
+
       return {
         ...fallbackSettings,
         ...(data || {}),
@@ -244,10 +251,10 @@ export default function ReceiptPrintPage() {
       <div className="no-print flex flex-col justify-between gap-4 rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm lg:flex-row lg:items-center">
         <div>
           <Link
-            to={`/orders/${order.id}`}
+            to="/pos"
             className="text-sm font-black text-slate-500 hover:text-slate-950"
           >
-            ← Back to Order
+            ← Back to POS
           </Link>
 
           <p className="mt-4 text-sm font-black uppercase tracking-[0.25em] text-slate-400">
@@ -308,34 +315,38 @@ export default function ReceiptPrintPage() {
           </div>
 
           <div className="mt-4 border-b border-dashed border-slate-400 pb-3 text-xs">
-            <div className="flex justify-between">
+            <div className="flex justify-between gap-3">
               <span>Receipt</span>
-              <span>{order.order_number}</span>
+              <span className="text-right">{order.order_number}</span>
             </div>
 
-            <div className="mt-1 flex justify-between">
+            <div className="mt-1 flex justify-between gap-3">
               <span>Date</span>
-              <span>
+              <span className="text-right">
                 {order.created_at
                   ? new Date(order.created_at).toLocaleString()
                   : "-"}
               </span>
             </div>
 
-            <div className="mt-1 flex justify-between">
+            <div className="mt-1 flex justify-between gap-3">
               <span>Channel</span>
-              <span>{labelize(order.channel || order.source)}</span>
+              <span className="text-right">
+                {labelize(order.channel || order.source)}
+              </span>
             </div>
 
-            <div className="mt-1 flex justify-between">
+            <div className="mt-1 flex justify-between gap-3">
               <span>Customer</span>
-              <span>{order.customer_name || "Walk-in"}</span>
+              <span className="text-right">
+                {order.customer_name || "Walk-in"}
+              </span>
             </div>
 
             {order.customer_phone ? (
-              <div className="mt-1 flex justify-between">
+              <div className="mt-1 flex justify-between gap-3">
                 <span>Phone</span>
-                <span>{order.customer_phone}</span>
+                <span className="text-right">{order.customer_phone}</span>
               </div>
             ) : null}
           </div>
@@ -353,7 +364,7 @@ export default function ReceiptPrintPage() {
               <tbody>
                 {items.map((item, index) => (
                   <tr
-                    key={item.id || `${item.product_id}-${index}`}
+                    key={item.id || `${item.product_id || "item"}-${index}`}
                     className="border-b border-dashed border-slate-200"
                   >
                     <td className="py-2 pr-2">
@@ -364,7 +375,9 @@ export default function ReceiptPrintPage() {
                         {money(item.unit_price, symbol)} each
                       </div>
                     </td>
+
                     <td className="py-2 text-center">{getItemQty(item)}</td>
+
                     <td className="py-2 text-right">
                       {money(getItemTotal(item), symbol)}
                     </td>
@@ -401,7 +414,10 @@ export default function ReceiptPrintPage() {
 
             {payments.length ? (
               payments.map((payment, index) => (
-                <div key={payment.id || index} className="mt-1 flex justify-between">
+                <div
+                  key={payment.id || index}
+                  className="mt-1 flex justify-between"
+                >
                   <span>{labelize(getPaymentMethod(payment))}</span>
                   <span>{money(payment.amount, symbol)}</span>
                 </div>
@@ -421,7 +437,9 @@ export default function ReceiptPrintPage() {
           ) : null}
 
           {settings?.receipt_footer ? (
-            <p className="mt-3 text-center text-xs">{settings.receipt_footer}</p>
+            <p className="mt-3 text-center text-xs">
+              {settings.receipt_footer}
+            </p>
           ) : null}
 
           <p className="mt-3 text-center text-[10px]">
