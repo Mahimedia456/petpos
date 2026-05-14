@@ -16,6 +16,62 @@ function normalizeCode(value) {
   return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 }
 
+function normalizeProductBarcode(value) {
+  return String(value || "").trim();
+}
+
+export async function findPosProductByBarcode({ barcode = "" }) {
+  const cleanBarcode = normalizeProductBarcode(barcode);
+
+  if (!cleanBarcode) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT
+      p.id,
+      p.name,
+      p.sku,
+      p.barcode,
+      p.image_url,
+      p.purchase_price,
+      p.selling_price,
+      p.regular_price,
+      p.sale_price,
+      p.stock_qty,
+      p.low_stock_threshold,
+      p.category_id,
+      c.name AS category_name
+    FROM products p
+    LEFT JOIN product_categories c ON c.id = p.category_id
+    WHERE p.is_active = TRUE
+      AND (
+        LOWER(COALESCE(p.barcode, '')) = LOWER($1)
+        OR LOWER(COALESCE(p.sku, '')) = LOWER($1)
+        OR REPLACE(LOWER(COALESCE(p.id::text, '')), '-', '') = REPLACE(LOWER($1), '-', '')
+      )
+    LIMIT 1
+    `,
+    [cleanBarcode]
+  );
+
+  const product = result.rows[0];
+
+  if (!product) return null;
+
+  return {
+    ...product,
+    purchase_price: toNumber(product.purchase_price),
+    selling_price: toNumber(product.selling_price),
+    regular_price: toNumber(product.regular_price),
+    sale_price: toNumber(product.sale_price),
+    stock_qty: toNumber(product.stock_qty),
+    stock_quantity: toNumber(product.stock_qty),
+    low_stock_threshold: toNumber(product.low_stock_threshold),
+  };
+}
+
 function calculatePromotionDiscount({ promotion, cartSubtotal, eligibleSubtotal }) {
   const baseAmount =
     promotion.applies_to === "cart" ? cartSubtotal : eligibleSubtotal;
@@ -222,6 +278,11 @@ export async function listPosProducts({ search = "", category_id = "" }) {
     low_stock_threshold: toNumber(product.low_stock_threshold),
   }));
 }
+
+/**
+ * Keep your existing createPosOrder function below this line.
+ * No need to change checkout logic if it is already working.
+ */
 
 export async function createPosOrder(payload, user) {
   const client = await pool.connect();

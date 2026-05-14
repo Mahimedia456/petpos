@@ -5,12 +5,29 @@ import {
   createPosOrderController,
   getPosCategoriesController,
   getPosProductsController,
+  scanPosBarcodeController,
 } from "./pos.controller.js";
 
 const router = express.Router();
 
-router.get("/categories", authMiddleware, asyncHandler(getPosCategoriesController));
-router.get("/products", authMiddleware, asyncHandler(getPosProductsController));
-router.post("/checkout", authMiddleware, asyncHandler(createPosOrderController));
+router.get(
+  "/categories",
+  authMiddleware,
+  asyncHandler(getPosCategoriesController)
+);
+
+router.get(
+  "/products",
+  authMiddleware,
+  asyncHandler(getPosProductsController)
+);
+
+router.get("/scan", authMiddleware, asyncHandler(scanPosBarcodeController));
+router.post("/scan", authMiddleware, asyncHandler(scanPosBarcodeController));
+router.post(
+  "/checkout",
+  authMiddleware,
+  asyncHandler(createPosOrderController)
+);
 
 export default router;

@@ -127,7 +127,10 @@ export const appRoutes = [
         path: "pos",
         element: <POSPage />,
       },
-
+{
+  path: "pos/scan",
+  element: <POSPage />,
+},
       {
         path: "products",
         element: <ProductsPage />,

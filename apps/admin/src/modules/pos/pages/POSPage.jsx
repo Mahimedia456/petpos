@@ -65,8 +65,8 @@ function normalizeReceiptData(data) {
 export default function POSPage() {
   const scannerInputRef = useRef(null);
   const videoRef = useRef(null);
-  const codeReaderRef = useRef(null);
   const cameraControlsRef = useRef(null);
+  const cameraStartingRef = useRef(false);
 
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -159,6 +159,16 @@ export default function POSPage() {
     return () => clearTimeout(timer);
   }, [search, selectedCategory]);
 
+  useEffect(() => {
+    if (!cameraOpen) return;
+
+    const timer = setTimeout(() => {
+      startCameraScan();
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [cameraOpen]);
+
   function addToCart(product) {
     const price = Number(product.sale_price || product.selling_price || 0);
     const stockQty = Number(product.stock_qty || product.stock_quantity || 0);
@@ -206,7 +216,7 @@ export default function POSPage() {
   async function scanBarcodeNow(value) {
     const code = String(value || "").trim();
 
-    if (!code) return;
+    if (!code) return false;
 
     setScanLoading(true);
     setError("");
@@ -255,17 +265,26 @@ export default function POSPage() {
     }
   }
 
-  async function startCameraScan() {
+  function openCamera() {
+    setScanMode("camera");
+    setCameraError("");
     setCameraOpen(true);
+  }
+
+  async function startCameraScan() {
+    if (cameraStartingRef.current) return;
+    if (!videoRef.current) return;
+
+    cameraStartingRef.current = true;
     setCameraLoading(true);
     setCameraError("");
-    setScanMessage("");
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Camera is not supported in this browser.");
+      }
 
       const codeReader = new BrowserMultiFormatReader();
-      codeReaderRef.current = codeReader;
 
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
 
@@ -278,32 +297,34 @@ export default function POSPage() {
           String(device.label || "").toLowerCase().includes("back")
         ) || devices[0];
 
-      cameraControlsRef.current = await codeReader.decodeFromVideoDevice(
+      const controls = await codeReader.decodeFromVideoDevice(
         backCamera.deviceId,
         videoRef.current,
-        async (result, error, controls) => {
+        async (result) => {
           if (!result) return;
 
           const scannedCode = result.getText();
 
           if (!scannedCode) return;
 
-          controls.stop();
-
-          cameraControlsRef.current = null;
+          stopCameraScan();
           setCameraOpen(false);
           setBarcodeInput(scannedCode);
 
           await scanBarcodeNow(scannedCode);
         }
       );
+
+      cameraControlsRef.current = controls;
     } catch (error) {
       console.error("Camera scan error:", error);
+
       setCameraError(
         error?.message ||
-          "Camera scan failed. Please allow camera permission or type barcode manually."
+          "Camera failed to open. Please allow camera permission or type barcode manually."
       );
     } finally {
+      cameraStartingRef.current = false;
       setCameraLoading(false);
     }
   }
@@ -315,8 +336,10 @@ export default function POSPage() {
         cameraControlsRef.current = null;
       }
 
-      if (codeReaderRef.current?.reset) {
-        codeReaderRef.current.reset();
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject;
+        stream.getTracks?.().forEach((track) => track.stop());
+        videoRef.current.srcObject = null;
       }
     } catch (error) {
       console.error("Stop camera error:", error);
@@ -506,10 +529,7 @@ export default function POSPage() {
 
             <button
               type="button"
-              onClick={() => {
-                setScanMode("camera");
-                startCameraScan();
-              }}
+              onClick={openCamera}
               className={
                 scanMode === "camera"
                   ? "inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white"
@@ -633,8 +653,7 @@ export default function POSPage() {
                   Camera Barcode Scanner
                 </h2>
                 <p className="mt-1 text-sm font-semibold text-slate-500">
-                  Point camera at barcode label. Product will be added
-                  automatically when detected.
+                  Allow camera permission and point camera at the barcode label.
                 </p>
               </div>
 
@@ -666,6 +685,7 @@ export default function POSPage() {
                   className="h-[420px] w-full object-cover"
                   muted
                   playsInline
+                  autoPlay
                 />
               </div>
 
