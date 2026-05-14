@@ -46,7 +46,12 @@ function calculatePromotionDiscount({ promotion, cartSubtotal, eligibleSubtotal 
   return Number(discount.toFixed(2));
 }
 
-async function validatePromotionForOrder(client, payload, normalizedItems, subtotal) {
+async function validatePromotionForOrder(
+  client,
+  payload,
+  normalizedItems,
+  subtotal
+) {
   const promotionId = payload.promotion_id || null;
   const promotionCode = normalizeCode(payload.promotion_code || payload.code);
 
@@ -115,7 +120,9 @@ async function validatePromotionForOrder(client, payload, normalizedItems, subto
 
   if (promotion.applies_to === "category") {
     eligibleSubtotal = normalizedItems
-      .filter((item) => String(item.category_id) === String(promotion.category_id))
+      .filter(
+        (item) => String(item.category_id) === String(promotion.category_id)
+      )
       .reduce((sum, item) => sum + item.line_total, 0);
   }
 
@@ -295,7 +302,10 @@ export async function createPosOrder(payload, user) {
         );
       }
 
-      const unitPrice = toNumber(item.unit_price, toNumber(product.selling_price));
+      const unitPrice = toNumber(
+        item.unit_price,
+        toNumber(product.selling_price)
+      );
       const lineDiscount = toNumber(item.discount);
       const lineTotal = Math.max(unitPrice * qty - lineDiscount, 0);
 
@@ -423,9 +433,10 @@ export async function createPosOrder(payload, user) {
     );
 
     const order = orderResult.rows[0];
+    const insertedItems = [];
 
     for (const item of normalizedItems) {
-      await client.query(
+      const itemResult = await client.query(
         `
         INSERT INTO order_items (
           order_id,
@@ -439,6 +450,7 @@ export async function createPosOrder(payload, user) {
           line_total
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
         `,
         [
           order.id,
@@ -452,6 +464,12 @@ export async function createPosOrder(payload, user) {
           item.line_total,
         ]
       );
+
+      insertedItems.push({
+        ...itemResult.rows[0],
+        quantity: itemResult.rows[0].qty,
+        total_price: Number(itemResult.rows[0].line_total || 0),
+      });
 
       await client.query(
         `
@@ -490,7 +508,7 @@ export async function createPosOrder(payload, user) {
       );
     }
 
-    await client.query(
+    const paymentResult = await client.query(
       `
       INSERT INTO payments (
         order_id,
@@ -500,9 +518,15 @@ export async function createPosOrder(payload, user) {
         status
       )
       VALUES ($1, $2, $3, $4, 'paid')
+      RETURNING *
       `,
       [order.id, payment_method, grandTotal, payment_reference]
     );
+
+    const payment = {
+      ...paymentResult.rows[0],
+      payment_method: paymentResult.rows[0].method,
+    };
 
     if (promotion?.id && promotionDiscount > 0) {
       await client.query(
@@ -555,29 +579,33 @@ export async function createPosOrder(payload, user) {
 
     await client.query("COMMIT");
 
+    const normalizedOrder = {
+      ...order,
+      id: order.id,
+      order_id: order.id,
+      order_number: order.order_no,
+      total_amount: Number(order.grand_total || 0),
+      subtotal: Number(order.subtotal || 0),
+      discount_total: Number(order.discount_total || 0),
+      discount_amount: Number(order.discount_total || 0),
+      promotion_discount: Number(order.promotion_discount || 0),
+      tax_total: Number(order.tax_total || 0),
+      delivery_fee: Number(order.delivery_fee || 0),
+      grand_total: Number(order.grand_total || 0),
+      channel: order.source,
+    };
+
     return {
       ok: true,
       status: 201,
       message: "POS order completed successfully.",
       data: {
-        order: {
-          ...order,
-          order_number: order.order_no,
-          total_amount: Number(order.grand_total || 0),
-          subtotal: Number(order.subtotal || 0),
-          discount_total: Number(order.discount_total || 0),
-          discount_amount: Number(order.discount_total || 0),
-          promotion_discount: Number(order.promotion_discount || 0),
-          tax_total: Number(order.tax_total || 0),
-          delivery_fee: Number(order.delivery_fee || 0),
-          grand_total: Number(order.grand_total || 0),
-        },
-        items: normalizedItems,
-        payment: {
-          method: payment_method,
-          amount: grandTotal,
-          reference_no: payment_reference,
-        },
+        order: normalizedOrder,
+        order_id: normalizedOrder.id,
+        order_number: normalizedOrder.order_number,
+        items: insertedItems,
+        payments: [payment],
+        payment,
       },
     };
   } catch (error) {

@@ -17,6 +17,41 @@ const defaultPayment = {
   payment_reference: "",
 };
 
+function getErrorMessage(err, fallback) {
+  if (err?.response?.status === 401) {
+    return "Session expired. Please login again.";
+  }
+
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
+function normalizeReceiptData(data) {
+  const order = data?.order || data;
+
+  if (!order?.id) {
+    return null;
+  }
+
+  return {
+    order: {
+      ...order,
+      id: order.id,
+      order_id: order.id,
+      order_number: order.order_number || order.order_no,
+      order_no: order.order_no || order.order_number,
+      total_amount: Number(order.total_amount || order.grand_total || 0),
+      grand_total: Number(order.grand_total || order.total_amount || 0),
+      subtotal: Number(order.subtotal || 0),
+      discount_total: Number(order.discount_total || order.discount_amount || 0),
+      discount_amount: Number(order.discount_amount || order.discount_total || 0),
+      tax_total: Number(order.tax_total || 0),
+      delivery_fee: Number(order.delivery_fee || 0),
+    },
+    items: data?.items || [],
+    payments: data?.payments || (data?.payment ? [data.payment] : []),
+  };
+}
+
 export default function POSPage() {
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -47,7 +82,7 @@ export default function POSPage() {
     try {
       const res = await getPosCategories();
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setCategories(res.data.data || []);
       }
     } catch (err) {
@@ -65,12 +100,16 @@ export default function POSPage() {
         category_id: selectedCategory,
       });
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setProducts(res.data.data || []);
+      } else {
+        setProducts([]);
+        setError(res?.data?.message || "Failed to load products.");
       }
     } catch (err) {
       console.error("POS products error:", err);
-      setError(err.response?.data?.message || "Failed to load products.");
+      setProducts([]);
+      setError(getErrorMessage(err, "Failed to load products."));
     } finally {
       setLoading(false);
     }
@@ -90,12 +129,15 @@ export default function POSPage() {
 
   function addToCart(product) {
     const price = Number(product.sale_price || product.selling_price || 0);
+    const stockQty = Number(product.stock_qty || product.stock_quantity || 0);
+
+    if (stockQty <= 0) return;
 
     setCart((prev) => {
       const exists = prev.find((item) => item.id === product.id);
 
       if (exists) {
-        if (exists.qty + 1 > Number(product.stock_qty || 0)) {
+        if (exists.qty + 1 > stockQty) {
           return prev;
         }
 
@@ -111,7 +153,7 @@ export default function POSPage() {
           name: product.name,
           sku: product.sku,
           price,
-          stock_qty: Number(product.stock_qty || 0),
+          stock_qty: stockQty,
           qty: 1,
         },
       ];
@@ -122,7 +164,6 @@ export default function POSPage() {
     setCart((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-
         if (item.qty + 1 > item.stock_qty) return item;
 
         return {
@@ -159,6 +200,7 @@ export default function POSPage() {
 
   function openCheckout() {
     if (!cart.length) return;
+
     setPayment(defaultPayment);
     setPaymentOpen(true);
   }
@@ -183,6 +225,7 @@ export default function POSPage() {
         customer_name: payment.customer_name || "Walk-in Customer",
         customer_phone: payment.customer_phone || "",
         source: "walk_in",
+        channel: "walk_in",
         payment_method: payment.payment_method,
         payment_reference: payment.payment_reference || "",
         discount_total: Number(discount || 0),
@@ -192,6 +235,7 @@ export default function POSPage() {
         items: cart.map((item) => ({
           product_id: item.id,
           qty: item.qty,
+          quantity: item.qty,
           unit_price: item.price,
           discount: 0,
         })),
@@ -199,18 +243,25 @@ export default function POSPage() {
 
       const res = await checkoutPosOrder(payload);
 
-      if (res.data?.ok) {
-        setReceipt(res.data.data);
+      if (res?.data?.ok) {
+        const normalizedReceipt = normalizeReceiptData(res.data.data);
+
+        if (!normalizedReceipt?.order?.id) {
+          throw new Error("Checkout completed, but order ID was not returned.");
+        }
+
+        setReceipt(normalizedReceipt);
         setPaymentOpen(false);
         setReceiptOpen(true);
         clearCart();
-        loadProducts();
-      } else {
-        setError(res.data?.message || "Checkout failed.");
+        await loadProducts();
+        return;
       }
+
+      setError(res?.data?.message || "Checkout failed.");
     } catch (err) {
       console.error("Checkout error:", err);
-      setError(err.response?.data?.message || "Checkout failed.");
+      setError(getErrorMessage(err, "Checkout failed."));
     } finally {
       setCheckoutLoading(false);
     }

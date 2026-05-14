@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import JsBarcode from "jsbarcode";
 import apiFetch from "../../../lib/apiFetch";
 import { getStoreSettings } from "../../../lib/storeSettings";
+
+const fallbackSettings = {
+  store_name: "Pet POS Store",
+  store_address: "",
+  store_phone: "",
+  store_email: "",
+  currency_symbol: "Rs",
+  receipt_show_logo: false,
+  logo_url: "",
+  receipt_header: "",
+  receipt_footer: "Thank you for shopping with us.",
+  receipt_show_barcode: true,
+};
 
 function money(value, symbol = "Rs") {
   return `${symbol} ${Number(value || 0).toLocaleString()}`;
@@ -10,6 +23,47 @@ function money(value, symbol = "Rs") {
 
 function labelize(value) {
   return String(value || "-").replaceAll("_", " ");
+}
+
+function normalizeOrderData(data) {
+  const order = data?.order || data;
+
+  if (!order) {
+    return {
+      order: null,
+      items: [],
+      payments: [],
+    };
+  }
+
+  return {
+    order: {
+      ...order,
+      id: order.id || order.order_id,
+      order_number: order.order_number || order.order_no,
+      order_no: order.order_no || order.order_number,
+      subtotal: Number(order.subtotal || 0),
+      discount_amount: Number(order.discount_amount || order.discount_total || 0),
+      discount_total: Number(order.discount_total || order.discount_amount || 0),
+      delivery_fee: Number(order.delivery_fee || 0),
+      total_amount: Number(order.total_amount || order.grand_total || 0),
+      grand_total: Number(order.grand_total || order.total_amount || 0),
+    },
+    items: data?.items || [],
+    payments: data?.payments || (data?.payment ? [data.payment] : []),
+  };
+}
+
+function getItemQty(item) {
+  return item.quantity || item.qty || 0;
+}
+
+function getItemTotal(item) {
+  return item.total_price || item.line_total || 0;
+}
+
+function getPaymentMethod(payment) {
+  return payment.payment_method || payment.method || "-";
 }
 
 function OrderBarcode({ value }) {
@@ -36,39 +90,71 @@ function OrderBarcode({ value }) {
 }
 
 export default function ReceiptPrintPage() {
-  const { orderId } = useParams();
+  const params = useParams();
+  const location = useLocation();
 
-  const [settings, setSettings] = useState(null);
+  const query = new URLSearchParams(location.search);
+
+  const orderId =
+    params.orderId ||
+    params.id ||
+    params.order_id ||
+    query.get("orderId") ||
+    query.get("id") ||
+    query.get("order_id");
+
+  const [settings, setSettings] = useState(fallbackSettings);
   const [order, setOrder] = useState(null);
   const [items, setItems] = useState([]);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
+  async function loadSettingsSafe() {
+    try {
+      const data = await getStoreSettings();
+      return {
+        ...fallbackSettings,
+        ...(data || {}),
+      };
+    } catch (error) {
+      console.error("[ReceiptPrintPage settings]", error);
+      return fallbackSettings;
+    }
+  }
+
+  async function loadOrderSafe() {
+    if (!orderId) {
+      throw new Error("Failed to load order ID.");
+    }
+
+    const orderRes = await apiFetch(`/admin/orders/${orderId}`);
+    const orderJson = await orderRes.json();
+
+    if (!orderRes.ok || !orderJson?.ok) {
+      throw new Error(orderJson?.message || "Failed to load order.");
+    }
+
+    return normalizeOrderData(orderJson.data);
+  }
+
   async function loadData() {
     try {
       setLoading(true);
       setMessage("");
 
-      const [settingsData, orderRes] = await Promise.all([
-        getStoreSettings(),
-        apiFetch(`/admin/orders/${orderId}`),
+      const [settingsData, orderData] = await Promise.all([
+        loadSettingsSafe(),
+        loadOrderSafe(),
       ]);
 
-      const orderJson = await orderRes.json();
-
-      if (!orderJson?.ok) {
-        setMessage(orderJson?.message || "Failed to load order.");
-        return;
-      }
-
       setSettings(settingsData);
-      setOrder(orderJson.data.order);
-      setItems(orderJson.data.items || []);
-      setPayments(orderJson.data.payments || []);
+      setOrder(orderData.order);
+      setItems(orderData.items || []);
+      setPayments(orderData.payments || []);
     } catch (error) {
       console.error("[ReceiptPrintPage]", error);
-      setMessage("Something went wrong while loading receipt.");
+      setMessage(error.message || "Something went wrong while loading receipt.");
     } finally {
       setLoading(false);
     }
@@ -80,14 +166,14 @@ export default function ReceiptPrintPage() {
 
   const totals = useMemo(() => {
     const subtotalFromItems = items.reduce((sum, item) => {
-      return sum + Number(item.total_price || 0);
+      return sum + Number(getItemTotal(item) || 0);
     }, 0);
 
     return {
       subtotal: Number(order?.subtotal || subtotalFromItems || 0),
-      discount: Number(order?.discount_amount || 0),
+      discount: Number(order?.discount_amount || order?.discount_total || 0),
       delivery: Number(order?.delivery_fee || 0),
-      total: Number(order?.total_amount || 0),
+      total: Number(order?.total_amount || order?.grand_total || 0),
     };
   }, [order, items]);
 
@@ -238,7 +324,7 @@ export default function ReceiptPrintPage() {
 
             <div className="mt-1 flex justify-between">
               <span>Channel</span>
-              <span>{labelize(order.channel)}</span>
+              <span>{labelize(order.channel || order.source)}</span>
             </div>
 
             <div className="mt-1 flex justify-between">
@@ -265,19 +351,22 @@ export default function ReceiptPrintPage() {
               </thead>
 
               <tbody>
-                {items.map((item) => (
-                  <tr key={item.id} className="border-b border-dashed border-slate-200">
+                {items.map((item, index) => (
+                  <tr
+                    key={item.id || `${item.product_id}-${index}`}
+                    className="border-b border-dashed border-slate-200"
+                  >
                     <td className="py-2 pr-2">
                       <div className="font-bold">
-                        {item.product_name || "Product"}
+                        {item.product_name || item.name || "Product"}
                       </div>
                       <div className="text-[10px]">
                         {money(item.unit_price, symbol)} each
                       </div>
                     </td>
-                    <td className="py-2 text-center">{item.quantity}</td>
+                    <td className="py-2 text-center">{getItemQty(item)}</td>
                     <td className="py-2 text-right">
-                      {money(item.total_price, symbol)}
+                      {money(getItemTotal(item), symbol)}
                     </td>
                   </tr>
                 ))}
@@ -311,9 +400,9 @@ export default function ReceiptPrintPage() {
             <div className="font-black">Payments</div>
 
             {payments.length ? (
-              payments.map((payment) => (
-                <div key={payment.id} className="mt-1 flex justify-between">
-                  <span>{labelize(payment.payment_method)}</span>
+              payments.map((payment, index) => (
+                <div key={payment.id || index} className="mt-1 flex justify-between">
+                  <span>{labelize(getPaymentMethod(payment))}</span>
                   <span>{money(payment.amount, symbol)}</span>
                 </div>
               ))

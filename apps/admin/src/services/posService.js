@@ -6,22 +6,49 @@ function authHeaders() {
 
   return {
     headers: {
+      "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   };
 }
 
-export function getPosCategories() {
-  return axios.get(`${API_BASE}/pos/categories`, authHeaders());
+function handleAuthError(error) {
+  if (error?.response?.status === 401) {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+    localStorage.removeItem("admin_user");
+
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
+  }
+
+  throw error;
 }
 
-export function getPosProducts(params = {}) {
-  return axios.get(`${API_BASE}/pos/products`, {
-    ...authHeaders(),
-    params,
-  });
+export async function getPosCategories() {
+  try {
+    return await axios.get(`${API_BASE}/pos/categories`, authHeaders());
+  } catch (error) {
+    handleAuthError(error);
+  }
 }
 
-export function checkoutPosOrder(payload) {
-  return axios.post(`${API_BASE}/pos/checkout`, payload, authHeaders());
+export async function getPosProducts(params = {}) {
+  try {
+    return await axios.get(`${API_BASE}/pos/products`, {
+      ...authHeaders(),
+      params,
+    });
+  } catch (error) {
+    handleAuthError(error);
+  }
+}
+
+export async function checkoutPosOrder(payload) {
+  try {
+    return await axios.post(`${API_BASE}/pos/checkout`, payload, authHeaders());
+  } catch (error) {
+    handleAuthError(error);
+  }
 }
