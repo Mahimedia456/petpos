@@ -31,17 +31,28 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await login(form);
+      const res = await login({
+        email: form.email.trim(),
+        password: form.password,
+      });
 
-      if (res.data?.ok) {
-        setSession(res.data.access_token, res.data.user);
+      const token =
+        res.data?.access_token ||
+        res.data?.token ||
+        res.data?.data?.access_token ||
+        res.data?.data?.token;
+
+      const user = res.data?.user || res.data?.data?.user;
+
+      if (res.data?.ok && token) {
+        setSession(token, user);
         navigate("/dashboard", { replace: true });
         return;
       }
 
       setError(res.data?.message || "Login failed.");
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed.");
+      setError(err.response?.data?.message || err.message || "Login failed.");
     } finally {
       setLoading(false);
     }
@@ -87,6 +98,7 @@ export default function LoginPage() {
                 type="email"
                 placeholder="admin@example.com"
                 className="w-full border-0 bg-transparent text-sm font-semibold text-slate-900 outline-none placeholder:text-slate-400"
+                required
               />
             </div>
           </div>
@@ -105,6 +117,7 @@ export default function LoginPage() {
                 type="password"
                 placeholder="Password"
                 className="w-full border-0 bg-transparent text-sm font-semibold text-slate-900 outline-none placeholder:text-slate-400"
+                required
               />
             </div>
           </div>

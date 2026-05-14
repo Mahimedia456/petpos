@@ -1,11 +1,8 @@
 import axios from "axios";
-import { getToken } from "../utils/auth";
-
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+import { API_BASE, getAuthToken } from "../lib/apiFetch";
 
 function authHeaders() {
-  const token = getToken();
+  const token = getAuthToken();
 
   return {
     headers: {

@@ -1,21 +1,46 @@
-import { api } from "./api";
+import { apiJson } from "../lib/apiFetch";
 
-export function login(payload) {
-  return api.post("/auth/login", payload);
+function axiosLike(data) {
+  return { data };
 }
 
-export function forgotPassword(payload) {
-  return api.post("/auth/forgot-password", payload);
+export async function login(payload) {
+  const data = await apiJson("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  return axiosLike(data);
 }
 
-export function verifyOtp(payload) {
-  return api.post("/auth/verify-otp", payload);
+export async function forgotPassword(payload) {
+  const data = await apiJson("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  return axiosLike(data);
 }
 
-export function resetPassword(payload) {
-  return api.post("/auth/reset-password", payload);
+export async function verifyOtp(payload) {
+  const data = await apiJson("/auth/verify-otp", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  return axiosLike(data);
 }
 
-export function getMe() {
-  return api.get("/auth/me");
+export async function resetPassword(payload) {
+  const data = await apiJson("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  return axiosLike(data);
+}
+
+export async function me() {
+  const data = await apiJson("/auth/me");
+  return axiosLike(data);
 }
