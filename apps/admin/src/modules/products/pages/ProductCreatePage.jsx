@@ -4,6 +4,14 @@ import { useState } from "react";
 import ProductForm from "../components/ProductForm";
 import { createProduct } from "../../../services/productService";
 
+function getErrorMessage(err, fallback) {
+  if (err?.response?.status === 401) {
+    return "Session expired. Please login again.";
+  }
+
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
 export default function ProductCreatePage() {
   const navigate = useNavigate();
 
@@ -17,14 +25,14 @@ export default function ProductCreatePage() {
     try {
       const res = await createProduct(payload);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         navigate("/products");
         return;
       }
 
-      setError(res.data?.message || "Failed to create product.");
+      setError(res?.data?.message || "Failed to create product.");
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to create product.");
+      setError(getErrorMessage(err, "Failed to create product."));
     } finally {
       setSaving(false);
     }

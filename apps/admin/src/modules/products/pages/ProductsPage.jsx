@@ -12,6 +12,14 @@ import { deleteProduct, getProducts } from "../../../services/productService";
 import { getCategories } from "../../../services/categoryService";
 import { formatCurrency } from "../../../utils/formatCurrency";
 
+function getErrorMessage(err, fallback) {
+  if (err?.response?.status === 401) {
+    return "Session expired. Please login again.";
+  }
+
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
 export default function ProductsPage() {
   const navigate = useNavigate();
 
@@ -29,9 +37,15 @@ export default function ProductsPage() {
   async function loadCategories() {
     try {
       const res = await getCategories();
-      if (res.data?.ok) setCategories(res.data.data || []);
+
+      if (res?.data?.ok) {
+        setCategories(res.data.data || []);
+      } else {
+        setCategories([]);
+      }
     } catch (err) {
       console.error("Load categories error:", err);
+      setCategories([]);
     }
   }
 
@@ -46,11 +60,15 @@ export default function ProductsPage() {
         stock_filter: stockFilter,
       });
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setRows(res.data.data || []);
+      } else {
+        setRows([]);
+        setError(res?.data?.message || "Failed to load products.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to load products.");
+      setRows([]);
+      setError(getErrorMessage(err, "Failed to load products."));
     } finally {
       setLoading(false);
     }
@@ -76,12 +94,14 @@ export default function ProductsPage() {
     try {
       const res = await deleteProduct(row.id);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setMessage(res.data.message || "Product disabled.");
-        loadProducts();
+        await loadProducts();
+      } else {
+        setError(res?.data?.message || "Failed to disable product.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to disable product.");
+      setError(getErrorMessage(err, "Failed to disable product."));
     }
   }
 
@@ -199,7 +219,9 @@ export default function ProductsPage() {
                 </tr>
               ) : rows.length ? (
                 rows.map((row) => {
-                  const salePrice = Number(row.sale_price || row.selling_price || 0);
+                  const salePrice = Number(
+                    row.sale_price || row.selling_price || 0
+                  );
                   const lowStock =
                     Number(row.stock_qty || 0) <=
                     Number(row.low_stock_threshold || 0);

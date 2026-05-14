@@ -30,6 +30,14 @@ function slugify(value) {
     .replace(/(^-|-$)+/g, "");
 }
 
+function getErrorMessage(err, fallback) {
+  if (err?.response?.status === 401) {
+    return "Session expired. Please login again.";
+  }
+
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
 export default function CategoriesPage() {
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
@@ -49,11 +57,15 @@ export default function CategoriesPage() {
     try {
       const res = await getCategories({ search });
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setRows(res.data.data || []);
+      } else {
+        setRows([]);
+        setError(res?.data?.message || "Failed to load categories.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to load categories.");
+      setRows([]);
+      setError(getErrorMessage(err, "Failed to load categories."));
     } finally {
       setLoading(false);
     }
@@ -91,6 +103,10 @@ export default function CategoriesPage() {
         next.slug = slugify(value);
       }
 
+      if (key === "slug") {
+        next.slug = slugify(value);
+      }
+
       return next;
     });
   }
@@ -113,16 +129,16 @@ export default function CategoriesPage() {
         ? await updateCategory(form.id, payload)
         : await createCategory(payload);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setMessage(res.data.message || "Category saved.");
         setModalOpen(false);
         setForm(emptyForm);
-        loadCategories();
+        await loadCategories();
       } else {
-        setError(res.data?.message || "Failed to save category.");
+        setError(res?.data?.message || "Failed to save category.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to save category.");
+      setError(getErrorMessage(err, "Failed to save category."));
     } finally {
       setSaving(false);
     }
@@ -139,12 +155,14 @@ export default function CategoriesPage() {
     try {
       const res = await deleteCategory(row.id);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setMessage(res.data.message || "Category deleted.");
-        loadCategories();
+        await loadCategories();
+      } else {
+        setError(res?.data?.message || "Failed to delete category.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to delete category.");
+      setError(getErrorMessage(err, "Failed to delete category."));
     }
   }
 
@@ -329,6 +347,7 @@ export default function CategoriesPage() {
                   onChange={(e) => updateField("name", e.target.value)}
                   className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-100"
                   placeholder="Cat Food"
+                  required
                 />
               </div>
 
@@ -341,6 +360,7 @@ export default function CategoriesPage() {
                   onChange={(e) => updateField("slug", e.target.value)}
                   className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-100"
                   placeholder="cat-food"
+                  required
                 />
               </div>
 

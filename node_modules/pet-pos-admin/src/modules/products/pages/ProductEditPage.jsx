@@ -4,6 +4,14 @@ import { useEffect, useState } from "react";
 import ProductForm from "../components/ProductForm";
 import { getProduct, updateProduct } from "../../../services/productService";
 
+function getErrorMessage(err, fallback) {
+  if (err?.response?.status === 401) {
+    return "Session expired. Please login again.";
+  }
+
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
 export default function ProductEditPage() {
   const navigate = useNavigate();
   const params = useParams();
@@ -20,11 +28,13 @@ export default function ProductEditPage() {
     try {
       const res = await getProduct(params.id);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         setProduct(res.data.data);
+      } else {
+        setError(res?.data?.message || "Failed to load product.");
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to load product.");
+      setError(getErrorMessage(err, "Failed to load product."));
     } finally {
       setPageLoading(false);
     }
@@ -41,14 +51,14 @@ export default function ProductEditPage() {
     try {
       const res = await updateProduct(params.id, payload);
 
-      if (res.data?.ok) {
+      if (res?.data?.ok) {
         navigate("/products");
         return;
       }
 
-      setError(res.data?.message || "Failed to update product.");
+      setError(res?.data?.message || "Failed to update product.");
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to update product.");
+      setError(getErrorMessage(err, "Failed to update product."));
     } finally {
       setSaving(false);
     }
@@ -93,11 +103,17 @@ export default function ProductEditPage() {
         </div>
       ) : null}
 
-      <ProductForm
-        initialData={product}
-        loading={saving}
-        onSubmit={submitProduct}
-      />
+      {product ? (
+        <ProductForm
+          initialData={product}
+          loading={saving}
+          onSubmit={submitProduct}
+        />
+      ) : (
+        <div className="rounded-[2rem] border border-slate-200 bg-white p-8 text-sm font-bold text-slate-500 shadow-sm">
+          Product not found.
+        </div>
+      )}
     </div>
   );
 }
