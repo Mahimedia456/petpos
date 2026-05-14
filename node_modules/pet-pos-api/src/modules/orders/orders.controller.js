@@ -9,12 +9,17 @@ const ORDER_STATUSES = [
   "refunded",
 ];
 
-const PAYMENT_STATUSES = ["unpaid", "partial", "paid", "refunded"];
+const PAYMENT_STATUSES = ["unpaid", "partial", "paid", "refunded", "failed"];
 
 const CHANNELS = ["walk_in", "whatsapp", "delivery", "online"];
 
 function cleanText(value) {
   return String(value || "").trim();
+}
+
+function toNumber(value) {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? num : 0;
 }
 
 function toLimit(value, fallback = 100) {
@@ -24,13 +29,71 @@ function toLimit(value, fallback = 100) {
 }
 
 function buildOrderNumber(row) {
-  if (row.order_number) return row.order_number;
-  const shortId = String(row.id || "").slice(0, 8).toUpperCase();
-  return `ORD-${shortId}`;
+  return row?.order_number || row?.order_no || `ORD-${String(row?.id || "").slice(0, 8).toUpperCase()}`;
+}
+
+function normalizeOrder(row) {
+  if (!row) return null;
+
+  return {
+    ...row,
+
+    order_id: row.id,
+    order_no: row.order_no || row.order_number,
+    order_number: buildOrderNumber(row),
+
+    source: row.source || row.channel || "walk_in",
+    channel: row.channel || row.source || "walk_in",
+
+    subtotal: toNumber(row.subtotal),
+    discount_total: toNumber(row.discount_total),
+    discount_amount: toNumber(row.discount_amount || row.discount_total),
+    tax_total: toNumber(row.tax_total),
+    delivery_fee: toNumber(row.delivery_fee),
+    grand_total: toNumber(row.grand_total),
+    total_amount: toNumber(row.total_amount || row.grand_total),
+
+    items_count: Number(row.items_count || 0),
+    units_count: Number(row.units_count || 0),
+  };
+}
+
+function normalizeItem(row) {
+  if (!row) return null;
+
+  return {
+    ...row,
+
+    qty: toNumber(row.qty),
+    quantity: toNumber(row.quantity || row.qty),
+
+    unit_price: toNumber(row.unit_price),
+    purchase_price: toNumber(row.purchase_price),
+    discount: toNumber(row.discount),
+
+    line_total: toNumber(row.line_total),
+    total_price: toNumber(row.total_price || row.line_total),
+  };
+}
+
+function normalizePayment(row) {
+  if (!row) return null;
+
+  return {
+    ...row,
+
+    method: row.method || row.payment_method,
+    payment_method: row.payment_method || row.method,
+
+    reference_no: row.reference_no || row.payment_reference || "",
+    payment_reference: row.payment_reference || row.reference_no || "",
+
+    amount: toNumber(row.amount),
+  };
 }
 
 export function getOrders(pool) {
-  return async function (req, res) {
+  return async function getOrdersHandler(req, res) {
     try {
       const {
         status,
@@ -57,7 +120,7 @@ export function getOrders(pool) {
 
       if (channel && CHANNELS.includes(channel)) {
         params.push(channel);
-        where.push(`o.channel = $${params.length}`);
+        where.push(`COALESCE(o.source, 'walk_in') = $${params.length}`);
       }
 
       if (date_from) {
@@ -74,93 +137,124 @@ export function getOrders(pool) {
         params.push(`%${cleanText(search)}%`);
         where.push(`
           (
-            o.order_number ilike $${params.length}
-            or o.customer_name ilike $${params.length}
-            or o.customer_phone ilike $${params.length}
-            or cast(o.id as text) ilike $${params.length}
+            COALESCE(o.order_no, '') ILIKE $${params.length}
+            OR COALESCE(o.customer_name, '') ILIKE $${params.length}
+            OR COALESCE(o.customer_phone, '') ILIKE $${params.length}
+            OR CAST(o.id AS text) ILIKE $${params.length}
           )
         `);
       }
 
       params.push(limit);
 
-      const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
       const result = await pool.query(
         `
-        select
+        SELECT
           o.id,
-          o.order_number,
-          o.channel,
-          o.status,
-          o.payment_status,
+          o.order_no,
+          o.order_no AS order_number,
+          o.customer_id,
           o.customer_name,
           o.customer_phone,
-          o.delivery_address,
-          o.delivery_fee,
-          o.discount_amount,
-          o.subtotal,
-          o.total_amount,
+          COALESCE(o.source, 'walk_in') AS source,
+          COALESCE(o.source, 'walk_in') AS channel,
+          o.status,
+          o.payment_status,
+          COALESCE(o.subtotal, 0)::numeric AS subtotal,
+          COALESCE(o.discount_total, 0)::numeric AS discount_total,
+          COALESCE(o.discount_total, 0)::numeric AS discount_amount,
+          COALESCE(o.tax_total, 0)::numeric AS tax_total,
+          COALESCE(o.delivery_fee, 0)::numeric AS delivery_fee,
+          COALESCE(o.grand_total, 0)::numeric AS grand_total,
+          COALESCE(o.grand_total, 0)::numeric AS total_amount,
           o.notes,
           o.created_at,
           o.updated_at,
-          coalesce(count(oi.id), 0)::int as items_count,
-          coalesce(sum(oi.quantity), 0)::int as units_count
-        from orders o
-        left join order_items oi on oi.order_id = o.id
+          COALESCE(COUNT(oi.id), 0)::int AS items_count,
+          COALESCE(SUM(oi.qty), 0)::int AS units_count
+        FROM orders o
+        LEFT JOIN order_items oi ON oi.order_id = o.id
         ${whereSql}
-        group by o.id
-        order by o.created_at desc
-        limit $${params.length}
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+        LIMIT $${params.length}
         `,
         params
       );
 
-      const rows = result.rows.map((row) => ({
-        ...row,
-        order_number: buildOrderNumber(row),
-      }));
-
       const summaryResult = await pool.query(`
-        select
-          count(*)::int as total_orders,
-          count(*) filter (where status = 'pending')::int as pending_orders,
-          count(*) filter (where status = 'out_for_delivery')::int as delivery_orders,
-          count(*) filter (where status = 'completed')::int as completed_orders,
-          count(*) filter (where payment_status = 'unpaid')::int as unpaid_orders,
-          coalesce(sum(total_amount), 0)::numeric as total_sales
-        from orders
+        SELECT
+          COUNT(*)::int AS total_orders,
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_orders,
+          COUNT(*) FILTER (WHERE status = 'out_for_delivery')::int AS delivery_orders,
+          COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_orders,
+          COUNT(*) FILTER (WHERE payment_status = 'unpaid')::int AS unpaid_orders,
+          COALESCE(SUM(grand_total), 0)::numeric AS total_sales
+        FROM orders
       `);
 
       res.json({
         ok: true,
         data: {
-          summary: summaryResult.rows[0],
-          orders: rows,
+          summary: {
+            ...summaryResult.rows[0],
+            total_sales: toNumber(summaryResult.rows[0]?.total_sales),
+          },
+          orders: result.rows.map(normalizeOrder),
         },
       });
     } catch (error) {
-      console.error("[getOrders]", error);
+      console.error("[getOrders] error:", error);
+
       res.status(500).json({
         ok: false,
-        message: "Failed to load orders.",
+        message: error.message || "Failed to load orders.",
       });
     }
   };
 }
 
 export function getOrderById(pool) {
-  return async function (req, res) {
+  return async function getOrderByIdHandler(req, res) {
     try {
       const { id } = req.params;
 
+      if (!id) {
+        return res.status(400).json({
+          ok: false,
+          message: "Order ID is required.",
+        });
+      }
+
       const orderResult = await pool.query(
         `
-        select
-          o.*
-        from orders o
-        where o.id = $1
-        limit 1
+        SELECT
+          o.id,
+          o.order_no,
+          o.order_no AS order_number,
+          o.customer_id,
+          o.customer_name,
+          o.customer_phone,
+          COALESCE(o.source, 'walk_in') AS source,
+          COALESCE(o.source, 'walk_in') AS channel,
+          o.status,
+          o.payment_status,
+          COALESCE(o.subtotal, 0)::numeric AS subtotal,
+          COALESCE(o.discount_total, 0)::numeric AS discount_total,
+          COALESCE(o.discount_total, 0)::numeric AS discount_amount,
+          COALESCE(o.tax_total, 0)::numeric AS tax_total,
+          COALESCE(o.delivery_fee, 0)::numeric AS delivery_fee,
+          COALESCE(o.grand_total, 0)::numeric AS grand_total,
+          COALESCE(o.grand_total, 0)::numeric AS total_amount,
+          o.notes,
+          o.created_by,
+          o.created_at,
+          o.updated_at
+        FROM orders o
+        WHERE o.id = $1
+        LIMIT 1
         `,
         [id]
       );
@@ -176,36 +270,43 @@ export function getOrderById(pool) {
 
       const itemsResult = await pool.query(
         `
-        select
+        SELECT
           oi.id,
           oi.order_id,
           oi.product_id,
-          coalesce(oi.product_name, p.name) as product_name,
-          coalesce(oi.sku, p.sku) as sku,
+          COALESCE(oi.product_name, p.name) AS product_name,
+          COALESCE(oi.sku, p.sku) AS sku,
           p.barcode,
-          oi.quantity,
-          oi.unit_price,
-          oi.total_price
-        from order_items oi
-        left join products p on p.id = oi.product_id
-        where oi.order_id = $1
-        order by oi.id asc
+          COALESCE(oi.qty, 0)::numeric AS qty,
+          COALESCE(oi.qty, 0)::numeric AS quantity,
+          COALESCE(oi.unit_price, 0)::numeric AS unit_price,
+          COALESCE(oi.purchase_price, 0)::numeric AS purchase_price,
+          COALESCE(oi.discount, 0)::numeric AS discount,
+          COALESCE(oi.line_total, 0)::numeric AS line_total,
+          COALESCE(oi.line_total, 0)::numeric AS total_price
+        FROM order_items oi
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE oi.order_id = $1
+        ORDER BY oi.id ASC
         `,
         [id]
       );
 
       const paymentsResult = await pool.query(
         `
-        select
-          id,
-          order_id,
-          payment_method,
-          amount,
-          status,
-          created_at
-        from payments
-        where order_id = $1
-        order by created_at desc
+        SELECT
+          p.id,
+          p.order_id,
+          p.method,
+          p.method AS payment_method,
+          COALESCE(p.amount, 0)::numeric AS amount,
+          p.reference_no,
+          p.reference_no AS payment_reference,
+          p.status,
+          p.created_at
+        FROM payments p
+        WHERE p.order_id = $1
+        ORDER BY p.created_at DESC
         `,
         [id]
       );
@@ -213,26 +314,24 @@ export function getOrderById(pool) {
       res.json({
         ok: true,
         data: {
-          order: {
-            ...order,
-            order_number: buildOrderNumber(order),
-          },
-          items: itemsResult.rows,
-          payments: paymentsResult.rows,
+          order: normalizeOrder(order),
+          items: itemsResult.rows.map(normalizeItem),
+          payments: paymentsResult.rows.map(normalizePayment),
         },
       });
     } catch (error) {
-      console.error("[getOrderById]", error);
+      console.error("[getOrderById] error:", error);
+
       res.status(500).json({
         ok: false,
-        message: "Failed to load order detail.",
+        message: error.message || "Failed to load order detail.",
       });
     }
   };
 }
 
 export function updateOrderStatus(pool) {
-  return async function (req, res) {
+  return async function updateOrderStatusHandler(req, res) {
     try {
       const { id } = req.params;
       const { status } = req.body || {};
@@ -246,11 +345,31 @@ export function updateOrderStatus(pool) {
 
       const result = await pool.query(
         `
-        update orders
-        set status = $1,
-            updated_at = now()
-        where id = $2
-        returning *
+        UPDATE orders
+        SET status = $1,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING
+          id,
+          order_no,
+          order_no AS order_number,
+          customer_id,
+          customer_name,
+          customer_phone,
+          COALESCE(source, 'walk_in') AS source,
+          COALESCE(source, 'walk_in') AS channel,
+          status,
+          payment_status,
+          COALESCE(subtotal, 0)::numeric AS subtotal,
+          COALESCE(discount_total, 0)::numeric AS discount_total,
+          COALESCE(discount_total, 0)::numeric AS discount_amount,
+          COALESCE(tax_total, 0)::numeric AS tax_total,
+          COALESCE(delivery_fee, 0)::numeric AS delivery_fee,
+          COALESCE(grand_total, 0)::numeric AS grand_total,
+          COALESCE(grand_total, 0)::numeric AS total_amount,
+          notes,
+          created_at,
+          updated_at
         `,
         [status, id]
       );
@@ -265,23 +384,21 @@ export function updateOrderStatus(pool) {
       res.json({
         ok: true,
         message: "Order status updated successfully.",
-        data: {
-          ...result.rows[0],
-          order_number: buildOrderNumber(result.rows[0]),
-        },
+        data: normalizeOrder(result.rows[0]),
       });
     } catch (error) {
-      console.error("[updateOrderStatus]", error);
+      console.error("[updateOrderStatus] error:", error);
+
       res.status(500).json({
         ok: false,
-        message: "Failed to update order status.",
+        message: error.message || "Failed to update order status.",
       });
     }
   };
 }
 
 export function updatePaymentStatus(pool) {
-  return async function (req, res) {
+  return async function updatePaymentStatusHandler(req, res) {
     try {
       const { id } = req.params;
       const { payment_status } = req.body || {};
@@ -295,11 +412,31 @@ export function updatePaymentStatus(pool) {
 
       const result = await pool.query(
         `
-        update orders
-        set payment_status = $1,
-            updated_at = now()
-        where id = $2
-        returning *
+        UPDATE orders
+        SET payment_status = $1,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING
+          id,
+          order_no,
+          order_no AS order_number,
+          customer_id,
+          customer_name,
+          customer_phone,
+          COALESCE(source, 'walk_in') AS source,
+          COALESCE(source, 'walk_in') AS channel,
+          status,
+          payment_status,
+          COALESCE(subtotal, 0)::numeric AS subtotal,
+          COALESCE(discount_total, 0)::numeric AS discount_total,
+          COALESCE(discount_total, 0)::numeric AS discount_amount,
+          COALESCE(tax_total, 0)::numeric AS tax_total,
+          COALESCE(delivery_fee, 0)::numeric AS delivery_fee,
+          COALESCE(grand_total, 0)::numeric AS grand_total,
+          COALESCE(grand_total, 0)::numeric AS total_amount,
+          notes,
+          created_at,
+          updated_at
         `,
         [payment_status, id]
       );
@@ -314,16 +451,14 @@ export function updatePaymentStatus(pool) {
       res.json({
         ok: true,
         message: "Payment status updated successfully.",
-        data: {
-          ...result.rows[0],
-          order_number: buildOrderNumber(result.rows[0]),
-        },
+        data: normalizeOrder(result.rows[0]),
       });
     } catch (error) {
-      console.error("[updatePaymentStatus]", error);
+      console.error("[updatePaymentStatus] error:", error);
+
       res.status(500).json({
         ok: false,
-        message: "Failed to update payment status.",
+        message: error.message || "Failed to update payment status.",
       });
     }
   };
