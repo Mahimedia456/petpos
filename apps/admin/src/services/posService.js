@@ -45,6 +45,19 @@ export async function getPosProducts(params = {}) {
   }
 }
 
+export async function scanPosBarcode(barcode) {
+  try {
+    return await axios.get(`${API_BASE}/pos/scan`, {
+      ...authHeaders(),
+      params: {
+        barcode,
+      },
+    });
+  } catch (error) {
+    handleAuthError(error);
+  }
+}
+
 export async function checkoutPosOrder(payload) {
   try {
     return await axios.post(`${API_BASE}/pos/checkout`, payload, authHeaders());

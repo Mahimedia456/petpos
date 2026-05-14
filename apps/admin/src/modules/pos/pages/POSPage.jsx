@@ -1,9 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { Barcode, RefreshCcw, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Barcode,
+  Camera,
+  Keyboard,
+  RefreshCcw,
+  ScanBarcode,
+  Search,
+  X,
+} from "lucide-react";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 import {
   checkoutPosOrder,
   getPosCategories,
   getPosProducts,
+  scanPosBarcode,
 } from "../../../services/posService";
 import ProductGrid from "../components/ProductGrid";
 import CartPanel from "../components/CartPanel";
@@ -53,11 +63,25 @@ function normalizeReceiptData(data) {
 }
 
 export default function POSPage() {
+  const scannerInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const codeReaderRef = useRef(null);
+  const cameraControlsRef = useRef(null);
+
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
+
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [scanMode, setScanMode] = useState("type");
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState("");
 
   const [cart, setCart] = useState([]);
   const [discount, setDiscount] = useState(0);
@@ -117,6 +141,14 @@ export default function POSPage() {
 
   useEffect(() => {
     loadCategories();
+
+    setTimeout(() => {
+      scannerInputRef.current?.focus();
+    }, 300);
+
+    return () => {
+      stopCameraScan();
+    };
   }, []);
 
   useEffect(() => {
@@ -131,20 +163,30 @@ export default function POSPage() {
     const price = Number(product.sale_price || product.selling_price || 0);
     const stockQty = Number(product.stock_qty || product.stock_quantity || 0);
 
-    if (stockQty <= 0) return;
+    if (stockQty <= 0) {
+      setScanMessage("Product is out of stock.");
+      return;
+    }
 
     setCart((prev) => {
-      const exists = prev.find((item) => item.id === product.id);
+      const exists = prev.find((item) => String(item.id) === String(product.id));
 
       if (exists) {
         if (exists.qty + 1 > stockQty) {
+          setScanMessage("Cannot add more. Stock limit reached.");
           return prev;
         }
 
+        setScanMessage(`${product.name} quantity increased.`);
+
         return prev.map((item) =>
-          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
+          String(item.id) === String(product.id)
+            ? { ...item, qty: item.qty + 1, stock_qty: stockQty }
+            : item
         );
       }
+
+      setScanMessage(`${product.name} added to cart.`);
 
       return [
         ...prev,
@@ -152,12 +194,142 @@ export default function POSPage() {
           id: product.id,
           name: product.name,
           sku: product.sku,
+          barcode: product.barcode,
           price,
           stock_qty: stockQty,
           qty: 1,
         },
       ];
     });
+  }
+
+  async function scanBarcodeNow(value) {
+    const code = String(value || "").trim();
+
+    if (!code) return;
+
+    setScanLoading(true);
+    setError("");
+    setScanMessage("");
+
+    try {
+      const res = await scanPosBarcode(code);
+
+      if (res?.data?.ok && res.data.data) {
+        addToCart(res.data.data);
+        setBarcodeInput("");
+        await loadProducts();
+        return true;
+      }
+
+      setScanMessage(res?.data?.message || "No product found.");
+      return false;
+    } catch (err) {
+      console.error("Barcode scan error:", err);
+
+      const message =
+        err?.response?.status === 404
+          ? "No product found for this barcode."
+          : getErrorMessage(err, "Barcode scan failed.");
+
+      setScanMessage(message);
+      return false;
+    } finally {
+      setScanLoading(false);
+
+      setTimeout(() => {
+        scannerInputRef.current?.focus();
+      }, 100);
+    }
+  }
+
+  function handleBarcodeSubmit(e) {
+    e.preventDefault();
+    scanBarcodeNow(barcodeInput);
+  }
+
+  function handleBarcodeKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      scanBarcodeNow(barcodeInput);
+    }
+  }
+
+  async function startCameraScan() {
+    setCameraOpen(true);
+    setCameraLoading(true);
+    setCameraError("");
+    setScanMessage("");
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const codeReader = new BrowserMultiFormatReader();
+      codeReaderRef.current = codeReader;
+
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+
+      if (!devices.length) {
+        throw new Error("No camera device found.");
+      }
+
+      const backCamera =
+        devices.find((device) =>
+          String(device.label || "").toLowerCase().includes("back")
+        ) || devices[0];
+
+      cameraControlsRef.current = await codeReader.decodeFromVideoDevice(
+        backCamera.deviceId,
+        videoRef.current,
+        async (result, error, controls) => {
+          if (!result) return;
+
+          const scannedCode = result.getText();
+
+          if (!scannedCode) return;
+
+          controls.stop();
+
+          cameraControlsRef.current = null;
+          setCameraOpen(false);
+          setBarcodeInput(scannedCode);
+
+          await scanBarcodeNow(scannedCode);
+        }
+      );
+    } catch (error) {
+      console.error("Camera scan error:", error);
+      setCameraError(
+        error?.message ||
+          "Camera scan failed. Please allow camera permission or type barcode manually."
+      );
+    } finally {
+      setCameraLoading(false);
+    }
+  }
+
+  function stopCameraScan() {
+    try {
+      if (cameraControlsRef.current) {
+        cameraControlsRef.current.stop();
+        cameraControlsRef.current = null;
+      }
+
+      if (codeReaderRef.current?.reset) {
+        codeReaderRef.current.reset();
+      }
+    } catch (error) {
+      console.error("Stop camera error:", error);
+    }
+  }
+
+  function closeCamera() {
+    stopCameraScan();
+    setCameraOpen(false);
+
+    setTimeout(() => {
+      scannerInputRef.current?.focus();
+    }, 150);
   }
 
   function increaseQty(id) {
@@ -196,6 +368,7 @@ export default function POSPage() {
   function clearCart() {
     setCart([]);
     setDiscount(0);
+    setScanMessage("");
   }
 
   function openCheckout() {
@@ -283,8 +456,7 @@ export default function POSPage() {
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm font-semibold leading-6 text-slate-500">
-                Search products by name, SKU or barcode. Add to cart and
-                complete walk-in payment instantly.
+                Scan with barcode device, type manually, or use camera scanner.
               </p>
             </div>
 
@@ -299,9 +471,99 @@ export default function POSPage() {
         </div>
 
         <div className="rounded-[1.7rem] border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => {
+                setScanMode("type");
+                scannerInputRef.current?.focus();
+              }}
+              className={
+                scanMode === "type"
+                  ? "inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white"
+                  : "inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"
+              }
+            >
+              <Keyboard size={17} />
+              Type
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setScanMode("device");
+                scannerInputRef.current?.focus();
+              }}
+              className={
+                scanMode === "device"
+                  ? "inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white"
+                  : "inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"
+              }
+            >
+              <ScanBarcode size={17} />
+              Device
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setScanMode("camera");
+                startCameraScan();
+              }}
+              className={
+                scanMode === "camera"
+                  ? "inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white"
+                  : "inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"
+              }
+            >
+              <Camera size={17} />
+              Camera
+            </button>
+          </div>
+
+          <form
+            onSubmit={handleBarcodeSubmit}
+            className="grid gap-3 lg:grid-cols-[1fr_auto]"
+          >
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <ScanBarcode size={20} className="text-slate-400" />
+
+              <input
+                ref={scannerInputRef}
+                value={barcodeInput}
+                onChange={(e) => setBarcodeInput(e.target.value)}
+                onKeyDown={handleBarcodeKeyDown}
+                placeholder={
+                  scanMode === "device"
+                    ? "Use barcode scanner device here..."
+                    : "Type barcode / SKU here..."
+                }
+                className="w-full border-0 bg-transparent text-sm font-black text-slate-800 outline-none placeholder:text-slate-400"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={scanLoading}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-lg shadow-slate-200 hover:bg-slate-800 disabled:opacity-60"
+            >
+              <ScanBarcode size={17} />
+              {scanLoading ? "Scanning..." : "Scan / Add"}
+            </button>
+          </form>
+
+          {scanMessage ? (
+            <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+              {scanMessage}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
             <div className="flex flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <Search size={18} className="text-slate-400" />
+
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -361,6 +623,76 @@ export default function POSPage() {
         receipt={receipt}
         onClose={() => setReceiptOpen(false)}
       />
+
+      {cameraOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-[2rem] bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 p-5">
+              <div>
+                <h2 className="text-2xl font-black text-slate-950">
+                  Camera Barcode Scanner
+                </h2>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  Point camera at barcode label. Product will be added
+                  automatically when detected.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeCamera}
+                className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5">
+              {cameraError ? (
+                <div className="mb-4 rounded-2xl bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  {cameraError}
+                </div>
+              ) : null}
+
+              {cameraLoading ? (
+                <div className="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
+                  Starting camera...
+                </div>
+              ) : null}
+
+              <div className="overflow-hidden rounded-3xl bg-slate-950">
+                <video
+                  ref={videoRef}
+                  className="h-[420px] w-full object-cover"
+                  muted
+                  playsInline
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeCamera}
+                  className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-black text-slate-700"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeCamera();
+                    setScanMode("type");
+                  }}
+                  className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white"
+                >
+                  Type Instead
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
